@@ -6,7 +6,7 @@ from typing import AsyncGenerator, Optional, Set, Dict, List, Tuple
 from urllib.parse import urlparse
 
 from ..models import TraversalStats
-from .filters import FilterChain
+from .filters import FilterChain, URLPatternFilter
 from .scorers import URLScorer
 from . import DeepCrawlStrategy  
 from ..types import AsyncWebCrawler, CrawlerRunConfig, CrawlResult, BaseDispatcher
@@ -213,11 +213,25 @@ class BFSDeepCrawlStrategy(DeepCrawlStrategy):
             visited.update(urls)
 
             stream_config = config.clone(deep_crawl_strategy=None, stream=True)
+
+            # this was done by veniamin
+            # to filter personal sites in case they are hosted else where.
+            url_path = urlparse(start_url).path.split(".")[0]
+            if url_path and stream_config.exclude_external_links:
+                filter_chain = FilterChain([
+                        # Only follow URLs with specific patterns
+                        URLPatternFilter(patterns=[f"*{url_path}*"])
+                    ])
+
+                stream_config.filter_chain = filter_chain
+                self.filter_chain = filter_chain
+
             stream_gen = await crawler.arun_many(urls=urls, config=stream_config, dispatcher=dispatcher)
-            
+                
             # Keep track of processed results for this batch
             results_count = 0
             async for result in stream_gen:
+                result = result[0]
                 url = result.url
                 depth = depths.get(url, 0)
                 result.metadata = result.metadata or {}
@@ -231,6 +245,7 @@ class BFSDeepCrawlStrategy(DeepCrawlStrategy):
                     # Check if we've reached the limit during batch processing
                     if self._pages_crawled >= self.max_pages:
                         self.logger.info(f"Max pages limit ({self.max_pages}) reached during batch, stopping crawl")
+                        self._pages_crawled = 0
                         break  # Exit the generator
                 
                 results_count += 1
